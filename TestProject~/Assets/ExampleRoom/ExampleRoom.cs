@@ -103,7 +103,7 @@ public class ExampleRoom : MonoBehaviour
         // Optimised version won't work for some reason
         //var source = new OptimizedMonoRtcAudioSource(audioFilter);
         //source.Start();
-        var source = new RtcAudioSource(audioSource, audioFilter);
+        var source = new CustomRtcAudioSource(audioSource, audioFilter);
         source.Start();
         
         var myTrack = m_Room.AudioTracks.CreateAudioTrack("own", source);
