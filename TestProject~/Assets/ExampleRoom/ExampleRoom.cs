@@ -27,6 +27,22 @@ public class ExampleRoom : MonoBehaviour
         StartAsync().Forget();
     }
 
+    private void Update()
+    {
+        foreach (var remoteParticipantIdentity in m_Room.Participants.RemoteParticipantIdentities())
+        {
+            var participant = m_Room.Participants.RemoteParticipant(remoteParticipantIdentity)!;
+            foreach (var (key, value) in participant.Tracks)
+            {
+                var track = m_Room.AudioStreams.ActiveStream(remoteParticipantIdentity, key!);
+                if (track != null)
+                {
+                    Debug.Log($"Participant {remoteParticipantIdentity} has track {key}");
+                }
+            }
+        }
+    }
+
     private async UniTaskVoid StartAsync()
     {
         // New Room must be called when WebGL assembly is loaded
