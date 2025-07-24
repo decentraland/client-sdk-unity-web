@@ -72,10 +72,12 @@ public class ExampleRoom : MonoBehaviour
 
         IRtcAudioSource source = new OptimizedMonoRtcAudioSource(audioFilter);
         var myTrack = m_Room.AudioTracks.CreateAudioTrack("own", source);
+        Debug.Log("Init finished");
     }
 
     private void HandleAddedTrack(ITrack track, TrackPublication publication)
     {
+        Debug.Log("Added track");
         if (track.Kind == TrackKind.KindAudio)
         {
             throw new NotImplementedException();

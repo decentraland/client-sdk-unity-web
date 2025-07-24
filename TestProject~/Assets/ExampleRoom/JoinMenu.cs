@@ -15,10 +15,23 @@ public class JoinMenu : MonoBehaviour
 
     void Start()
     {
+        if (PlayerPrefs.HasKey(nameof(LivekitURL)))
+        {
+            URLField.text = PlayerPrefs.GetString(nameof(LivekitURL));
+        }
+
+        if (PlayerPrefs.HasKey(nameof(RoomToken)))
+        {
+            TokenField.text = PlayerPrefs.GetString(nameof(RoomToken));
+        }
+
         StartCoroutine(StartPreviewCamera());
 
         ConnectButton.onClick.AddListener(() =>
         {
+            PlayerPrefs.SetString(nameof(LivekitURL), URLField.text);
+            PlayerPrefs.SetString(nameof(RoomToken), TokenField.text);
+
             LivekitURL = URLField.text;
             RoomToken = TokenField.text;
 
