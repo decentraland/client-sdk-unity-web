@@ -1,5 +1,12 @@
 {
   "dependencies": {
+    "com.decentraland.livekit-sdk": {
+      "version": "https://github.com/decentraland/client-sdk-unity.git",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {},
+      "hash": "840b099eb743cee5ed4b200ab9b08f3fc7fc5e82"
+    },
     "com.unity.collab-proxy": {
       "version": "1.17.7",
       "depth": 0,
