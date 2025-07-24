@@ -48,6 +48,7 @@ public class ExampleRoom : MonoBehaviour
                             var livekitAudioSource = LivekitAudioSource.New(true);
                             livekitAudioSource.Construct(track);
                             Debug.Log($"Participant {remoteParticipantIdentity} added track {key}");
+                            sourcesMap[audioStream] = livekitAudioSource;
                         }
                     }
                 }
