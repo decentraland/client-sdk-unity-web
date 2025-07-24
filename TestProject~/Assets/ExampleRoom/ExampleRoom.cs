@@ -99,7 +99,8 @@ public class ExampleRoom : MonoBehaviour
         // Play back the captured audio
         audioSource.Play();
 
-        IRtcAudioSource source = new OptimizedMonoRtcAudioSource(audioFilter);
+        var source = new OptimizedMonoRtcAudioSource(audioFilter);
+        source.Start();
         var myTrack = m_Room.AudioTracks.CreateAudioTrack("own", source);
         var trackOptions = new TrackPublishOptions
         {
