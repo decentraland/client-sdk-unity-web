@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using System.Linq;
 using System.Threading;
+using Cysharp.Threading.Tasks;
 using LiveKit;
 using LiveKit.Proto;
 using LiveKit.Rooms;
@@ -21,7 +22,12 @@ public class ExampleRoom : MonoBehaviour
     public Button DisconnectButton;
     [SerializeField] private GameObject microphoneObject;
 
-    IEnumerator Start()
+    private void Start()
+    {
+        StartAsync().Forget();
+    }
+
+    private async UniTaskVoid StartAsync()
     {
         // New Room must be called when WebGL assembly is loaded
         m_Room = new Room();
@@ -34,14 +40,12 @@ public class ExampleRoom : MonoBehaviour
         };
         m_Room.TrackSubscribed += (track, publication, participant) => HandleAddedTrack(track, publication);
 
-        var c = m_Room.ConnectAsync(JoinMenu.LivekitURL, JoinMenu.RoomToken, CancellationToken.None, true).GetAwaiter()
-            .GetResult();
-        yield return c;
+        var c = await m_Room.ConnectAsync(JoinMenu.LivekitURL, JoinMenu.RoomToken, CancellationToken.None, true);
 
         if (c.success == false)
         {
             Debug.Log($"Failed to connect to the room !: {c.errorMessage}");
-            yield break;
+            return;
         }
 
         Debug.Log("Connected to the room");
@@ -61,9 +65,7 @@ public class ExampleRoom : MonoBehaviour
         audioSource.loop = true;
         audioSource.clip = Microphone.Start(microphoneName, true, 1, 48000); //frequency is not guaranteed
         // Wait until mic is initialized
-        while (!(Microphone.GetPosition(microphoneName) > 0))
-        {
-        }
+        await UniTask.WaitWhile(() => !(Microphone.GetPosition(microphoneName) > 0)).Timeout(TimeSpan.FromSeconds(5));
 
         // Play back the captured audio
         audioSource.Play();
