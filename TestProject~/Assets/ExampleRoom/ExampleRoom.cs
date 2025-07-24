@@ -1,5 +1,5 @@
 using System;
-using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using System.Linq;
@@ -9,6 +9,7 @@ using LiveKit;
 using LiveKit.Proto;
 using LiveKit.Rooms;
 using LiveKit.Rooms.Participants;
+using LiveKit.Rooms.Streaming.Audio;
 using LiveKit.Rooms.TrackPublications;
 using LiveKit.Rooms.Tracks;
 using UnityEngine.SceneManagement;
@@ -16,10 +17,13 @@ using UnityEngine.SceneManagement;
 public class ExampleRoom : MonoBehaviour
 {
     private Room m_Room;
+    private Dictionary<IAudioStream, LivekitAudioSource> sourcesMap = new();
 
     public GridLayoutGroup ViewContainer;
     public RawImage ViewPrefab;
     public Button DisconnectButton;
+
+    [Header("Debug")]
     [SerializeField] private GameObject microphoneObject;
 
     private void Start()
@@ -37,7 +41,15 @@ public class ExampleRoom : MonoBehaviour
                 var track = m_Room.AudioStreams.ActiveStream(remoteParticipantIdentity, key!);
                 if (track != null)
                 {
-                    Debug.Log($"Participant {remoteParticipantIdentity} has track {key}");
+                    if (track.TryGetTarget(out var audioStream))
+                    {
+                        if (sourcesMap.ContainsKey(audioStream) == false)
+                        {
+                            var livekitAudioSource = LivekitAudioSource.New(true);
+                            livekitAudioSource.Construct(track);
+                            Debug.Log($"Participant {remoteParticipantIdentity} added track {key}");
+                        }
+                    }
                 }
             }
         }
@@ -88,6 +100,17 @@ public class ExampleRoom : MonoBehaviour
 
         IRtcAudioSource source = new OptimizedMonoRtcAudioSource(audioFilter);
         var myTrack = m_Room.AudioTracks.CreateAudioTrack("own", source);
+        var trackOptions = new TrackPublishOptions
+        {
+            AudioEncoding = new AudioEncoding
+            {
+                MaxBitrate = 124000
+            },
+            Source = TrackSource.SourceMicrophone
+        };
+        var publishTask = m_Room.Participants.LocalParticipant()
+            .PublishTrack(myTrack, trackOptions, CancellationToken.None);
+        await UniTask.WaitUntil(() => publishTask.IsDone);
         Debug.Log("Init finished");
     }
 
