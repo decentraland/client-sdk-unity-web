@@ -66,7 +66,6 @@ public class ExampleRoom : MonoBehaviour
             if (update == UpdateFromParticipant.Connected)
                 Debug.Log($"Participant connected: {p.Sid}");
         };
-        m_Room.TrackSubscribed += (track, publication, participant) => HandleAddedTrack(track, publication);
 
         var c = await m_Room.ConnectAsync(JoinMenu.LivekitURL, JoinMenu.RoomToken, CancellationToken.None, true);
 
@@ -112,15 +111,6 @@ public class ExampleRoom : MonoBehaviour
             .PublishTrack(myTrack, trackOptions, CancellationToken.None);
         await UniTask.WaitUntil(() => publishTask.IsDone);
         Debug.Log("Init finished");
-    }
-
-    private void HandleAddedTrack(ITrack track, TrackPublication publication)
-    {
-        Debug.Log("Added track");
-        if (track.Kind == TrackKind.KindAudio)
-        {
-            throw new NotImplementedException();
-        }
     }
 
     private void OnDestroy()
