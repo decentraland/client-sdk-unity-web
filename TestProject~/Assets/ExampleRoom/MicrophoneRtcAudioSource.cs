@@ -4,7 +4,6 @@ using LiveKit;
 using LiveKit.Internal;
 using LiveKit.Internal.FFIClients.Requests;
 using LiveKit.Proto;
-using Livekit.Utils;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
@@ -15,29 +14,20 @@ namespace ExampleRooms
     {
         private const int DEFAULT_NUM_CHANNELS = 2;
         private const int DEFAULT_SAMPLE_RATE = 48000;
-        private const float BUFFER_DURATION_S = 0.2f;
-        private readonly Mutex<RingBuffer> buffer;
+        private readonly AudioBuffer buffer = new();
         private readonly object lockObject = new();
 
         private readonly AudioSource audioSource;
         private readonly IAudioFilter audioFilter;
         private readonly Apm apm; // Doesn't own APM, Doesn't have to dispose
-        private PCMSample[] tempBuffer;
-        private AudioFrame frame;
-        private uint channels;
-        private uint sampleRate;
-        private int currentBufferSize;
+        private readonly ApmReverseStream? reverseStream;
 
-        private int cachedFrameSize;
-        public FfiHandle Handle => handle;
+        public FfiHandle Handle { get; }
 
-        internal FfiHandle handle { get; }
-
-        // TODO estiname Stream Delay Ms for APM 
         public MicrophoneRtcAudioSource(AudioSource audioSource, IAudioFilter audioFilter, Apm apm)
         {
-            buffer = new Mutex<RingBuffer>(new RingBuffer(0));
-            currentBufferSize = 0;
+            reverseStream = ApmReverseStream.NewOrNull(apm);
+
             using var request = FFIBridge.Instance.NewRequest<NewAudioSourceRequest>();
             var newAudioSource = request.request;
             newAudioSource.Type = AudioSourceType.AudioSourceNative;
@@ -52,7 +42,7 @@ namespace ExampleRooms
 
             using var response = request.Send();
             FfiResponse res = response;
-            handle = IFfiHandleFactory.Default.NewFfiHandle(res.NewAudioSource.Source.Handle!.Id);
+            Handle = IFfiHandleFactory.Default.NewFfiHandle(res.NewAudioSource.Source.Handle!.Id);
             this.audioSource = audioSource;
             this.audioFilter = audioFilter;
             this.apm = apm;
@@ -69,108 +59,68 @@ namespace ExampleRooms
 
             audioFilter.AudioRead += OnAudioRead;
             audioSource.Play();
+            reverseStream?.Start();
         }
 
         public void Stop()
         {
             if (audioFilter?.IsValid == true) audioFilter.AudioRead -= OnAudioRead;
             if (audioSource) audioSource.Stop();
+            reverseStream?.Stop();
+            
+            //TODO IRtcAudioSource must implement dispose method to place this call
+            reverseStream?.Dispose();
 
             lock (lockObject)
             {
-                using var guard = buffer.Lock();
-                guard.Value.Dispose();
-                if (frame.IsValid) frame.Dispose();
+                buffer.Dispose();
             }
         }
 
         private void OnAudioRead(Span<float> data, int channels, int sampleRate)
         {
-            var needsReconfiguration = channels != this.channels ||
-                                       sampleRate != this.sampleRate ||
-                                       data.Length != tempBuffer?.Length;
-
-            var newBufferSize = 0;
-            if (needsReconfiguration)
-            {
-                newBufferSize = (int)(channels * sampleRate * BUFFER_DURATION_S) * sizeof(short);
-            }
-
             lock (lockObject)
             {
-                if (needsReconfiguration)
+                buffer.Write(data, (uint)channels, (uint)sampleRate);
+                while (true)
                 {
-                    var needsNewBuffer = newBufferSize != currentBufferSize;
+                    var frameResult = buffer.ReadDuration(ApmFrame.FRAME_DURATION_MS);
+                    if (frameResult.Has == false) break;
+                    using var frame = frameResult.Value;
 
-                    if (needsNewBuffer)
+                    var audioBytes = MemoryMarshal.Cast<byte, PCMSample>(frame.AsSpan());
+
+                    var apmFrame = ApmFrame.New(
+                        audioBytes,
+                        frame.NumChannels,
+                        frame.SamplesPerChannel,
+                        new SampleRate(frame.SampleRate),
+                        out string? error
+                    );
+                    if (error != null)
                     {
-                        using var guard = buffer.Lock();
-                        guard.Value.Dispose();
-                        guard.Value = new RingBuffer(newBufferSize);
-                        currentBufferSize = newBufferSize;
+                        Debug.LogError($"Error during creation ApmFrame: {error}");
+                        break;
                     }
 
-                    tempBuffer = new PCMSample[data.Length];
-                    this.channels = (uint)channels;
-                    this.sampleRate = (uint)sampleRate;
-                    if (frame.IsValid) frame.Dispose();
-                    frame = new AudioFrame(this.sampleRate, this.channels, (uint)(tempBuffer.Length / this.channels));
+                    var apmResult = apm.ProcessStream(apmFrame);
+                    if (apmResult.Success == false)
+                        Debug.LogError($"Error during processing stream: {apmResult.ErrorMessage}");
 
-                    cachedFrameSize = frame.Length;
-                }
-
-                if (tempBuffer == null)
-                {
-                    Debug.LogError("Temp buffer is null");
-                    return;
-                }
-
-                var tempSpan = tempBuffer.AsSpan();
-                for (var i = 0; i < data.Length; i++)
-                {
-                    tempSpan[i] = PCMSample.FromUnitySample(data[i]);
-                }
-
-                var shouldProcessFrame = false;
-                using (var guard = buffer.Lock())
-                {
-                    var audioBytes = MemoryMarshal.Cast<PCMSample, byte>(tempBuffer.AsSpan());
-                    guard.Value.Write(audioBytes);
-                    shouldProcessFrame = guard.Value.AvailableRead() >= cachedFrameSize;
-                }
-
-                if (shouldProcessFrame)
-                {
-                    ProcessAudioFrame();
+                    ProcessAudioFrame(frame);
                 }
             }
         }
 
-        private void ProcessAudioFrame()
+        private void ProcessAudioFrame(in AudioFrame frame)
         {
-            if (!frame.IsValid) return;
-
-            unsafe
-            {
-                var frameSpan = new Span<byte>(frame.Data.ToPointer(), cachedFrameSize);
-
-                using (var guard = buffer.Lock())
-                {
-                    var bytesRead = guard.Value.Read(frameSpan);
-                    if (bytesRead < cachedFrameSize)
-                    {
-                        return; // Don't send incomplete frames
-                    }
-                }
-            }
-
             try
             {
                 using var request = FFIBridge.Instance.NewRequest<CaptureAudioFrameRequest>();
                 using var audioFrameBufferInfo = request.TempResource<AudioFrameBufferInfo>();
 
                 var pushFrame = request.request;
-                pushFrame.SourceHandle = (ulong)handle.DangerousGetHandle();
+                pushFrame.SourceHandle = (ulong)Handle.DangerousGetHandle();
                 pushFrame.Buffer = audioFrameBufferInfo;
                 pushFrame.Buffer.DataPtr = (ulong)frame.Data;
                 pushFrame.Buffer.NumChannels = frame.NumChannels;
@@ -190,7 +140,7 @@ namespace ExampleRooms
             }
         }
     }
-    
+
     // Just a copy from livekit, because ctor is internal
     public struct AudioFrame : IDisposable
     {
@@ -201,7 +151,7 @@ namespace ExampleRooms
         private readonly NativeArray<byte> _data;
         private readonly IntPtr _dataPtr;
         private bool _disposed;
-        
+
         public IntPtr Data => _dataPtr;
         public int Length => (int)(SamplesPerChannel * NumChannels * sizeof(short));
         public bool IsValid => _data.IsCreated && !_disposed;
@@ -236,7 +186,7 @@ namespace ExampleRooms
                 Debug.Log("Attempted to access disposed AudioFrame");
                 return Span<byte>.Empty;
             }
-            
+
             unsafe
             {
                 return new Span<byte>(_dataPtr.ToPointer(), Length);

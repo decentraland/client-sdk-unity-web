@@ -92,6 +92,7 @@ public class ExampleRoom : MonoBehaviour
         });
 
         apm = Apm.NewDefault();
+        apm.SetStreamDelay(Apm.EstimateStreamDelayMs());
 
         microphoneObject = new GameObject("microphone");
 
@@ -261,6 +262,14 @@ public class Apm : IDisposable
             return Result.SuccessResult();
         }
     }
+
+    public static int EstimateStreamDelayMs()
+    {
+        // TODO: estimate more accurately
+        int sampleRate = AudioSettings.outputSampleRate;
+        AudioSettings.GetDSPBufferSize(out var bufferLength, out var numBuffers);
+        return 2 * (int)(1000f * bufferLength * numBuffers / sampleRate);
+    }
 }
 
 /// <summary>
@@ -268,6 +277,8 @@ public class Apm : IDisposable
 /// </summary>
 public readonly ref struct ApmFrame
 {
+    public const uint FRAME_DURATION_MS = 10;
+    
     public readonly ReadOnlySpan<PCMSample> data;
     public readonly uint numChannels;
     public readonly uint samplesPerChannel;
@@ -302,6 +313,12 @@ public readonly ref struct ApmFrame
             return default;
         }
 
+        if (sampleRate.valueHz == 0)
+        {
+            error = "SampleRate is 0, it's invalid value.";
+            return default;
+        }
+
         // Expected samples per 10 ms per channel
         uint expectedSamplesPerChannel = sampleRate.valueHz / 100;
 
@@ -329,7 +346,7 @@ public readonly struct SampleRate
 
     public readonly uint valueHz;
 
-    private SampleRate(uint value)
+    public SampleRate(uint value)
     {
         valueHz = value;
     }
