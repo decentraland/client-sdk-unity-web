@@ -8,11 +8,10 @@ using Livekit.Utils;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
-using UnityEngine.Diagnostics;
 
 namespace ExampleRooms
 {
-    public class CustomRtcAudioSource : IRtcAudioSource
+    public class MicrophoneRtcAudioSource : IRtcAudioSource
     {
         private const int DEFAULT_NUM_CHANNELS = 2;
         private const int DEFAULT_SAMPLE_RATE = 48000;
@@ -25,6 +24,7 @@ namespace ExampleRooms
 
         private readonly AudioSource audioSource;
         private readonly IAudioFilter audioFilter;
+        private readonly Apm apm; // Doesn't own APM, Doesn't have to dispose
         private short[] tempBuffer;
         private AudioFrame frame;
         private uint channels;
@@ -36,7 +36,8 @@ namespace ExampleRooms
 
         internal FfiHandle handle { get; }
 
-        public CustomRtcAudioSource(AudioSource audioSource, IAudioFilter audioFilter)
+        // TODO estiname Stream Delay Ms for APM 
+        public MicrophoneRtcAudioSource(AudioSource audioSource, IAudioFilter audioFilter, Apm apm)
         {
             buffer = new Mutex<RingBuffer>(new RingBuffer(0));
             currentBufferSize = 0;
@@ -49,14 +50,15 @@ namespace ExampleRooms
             using var options = request.TempResource<AudioSourceOptions>();
             newAudioSource.Options = options;
             newAudioSource.Options.EchoCancellation = true;
-            newAudioSource.Options.NoiseSuppression = false;
-            newAudioSource.Options.AutoGainControl = false;
+            newAudioSource.Options.NoiseSuppression = true;
+            newAudioSource.Options.AutoGainControl = true;
 
             using var response = request.Send();
             FfiResponse res = response;
             handle = IFfiHandleFactory.Default.NewFfiHandle(res.NewAudioSource.Source.Handle!.Id);
             this.audioSource = audioSource;
             this.audioFilter = audioFilter;
+            this.apm = apm;
         }
 
         public void Start()

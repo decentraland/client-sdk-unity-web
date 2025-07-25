@@ -14,6 +14,13 @@
       "dependencies": {},
       "hash": "840b099eb743cee5ed4b200ab9b08f3fc7fc5e82"
     },
+    "com.nickkhalow.richtypes": {
+      "version": "https://github.com/NickKhalow/RichTypesUnity.git?path=/Packages/RichTypes",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {},
+      "hash": "ae15a0351cbc1f15d955024802c2eb8f9c70cb9e"
+    },
     "com.unity.collab-proxy": {
       "version": "1.17.7",
       "depth": 0,

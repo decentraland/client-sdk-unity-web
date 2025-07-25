@@ -15,13 +15,15 @@ using LiveKit.Proto;
 using LiveKit.Rooms;
 using LiveKit.Rooms.Participants;
 using LiveKit.Rooms.Streaming.Audio;
+using RichTypes;
 using UnityEngine.SceneManagement;
 
 public class ExampleRoom : MonoBehaviour
 {
     private Room m_Room;
     private Apm apm;
-    private Dictionary<IAudioStream, LivekitAudioSource> sourcesMap = new();
+
+    private readonly Dictionary<IAudioStream, LivekitAudioSource> sourcesMap = new();
 
     public GridLayoutGroup ViewContainer;
     public RawImage ViewPrefab;
@@ -89,6 +91,7 @@ public class ExampleRoom : MonoBehaviour
             SceneManager.LoadScene("JoinScene", LoadSceneMode.Single);
         });
 
+        apm = Apm.NewDefault();
 
         microphoneObject = new GameObject("microphone");
 
@@ -99,7 +102,7 @@ public class ExampleRoom : MonoBehaviour
         audioSource.clip = Microphone.Start(microphoneName, true, 1, 48000); //frequency is not guaranteed
         // Wait until mic is initialized
         await UniTask.WaitWhile(() => !(Microphone.GetPosition(microphoneName) > 0)).Timeout(TimeSpan.FromSeconds(5));
-        
+
         var audioFilter = microphoneObject.AddComponent<AudioFilter>();
         // Prevent microphone feedback
         microphoneObject.AddComponent<OmitAudioFilter>();
@@ -109,9 +112,9 @@ public class ExampleRoom : MonoBehaviour
         // Optimised version won't work for some reason
         //var source = new OptimizedMonoRtcAudioSource(audioFilter);
         //source.Start();
-        var source = new CustomRtcAudioSource(audioSource, audioFilter);
+        var source = new MicrophoneRtcAudioSource(audioSource, audioFilter, apm);
         source.Start();
-        
+
         var myTrack = m_Room.AudioTracks.CreateAudioTrack("own", source);
         var trackOptions = new TrackPublishOptions
         {
@@ -142,37 +145,52 @@ public class ExampleRoom : MonoBehaviour
     }
 
 
-    private class Apm : IDisposable
+}
+
+public class Apm : IDisposable
+{
+    private readonly FfiHandle apmHandle;
+
+    public Apm(
+        bool echoCancellerEnabled,
+        bool noiseSuppressionEnabled,
+        bool gainControllerEnabled,
+        bool highPassFilterEnabled)
     {
-        private readonly FfiHandle apmHandle;
+        using var apmRequest = FFIBridge.Instance.NewRequest<NewApmRequest>();
+        apmRequest.request.EchoCancellerEnabled = echoCancellerEnabled;
+        apmRequest.request.NoiseSuppressionEnabled = noiseSuppressionEnabled;
+        apmRequest.request.GainControllerEnabled = gainControllerEnabled;
+        apmRequest.request.HighPassFilterEnabled = highPassFilterEnabled;
 
-        public Apm()
-        {
-            using var apmRequest = FFIBridge.Instance.NewRequest<NewApmRequest>();
-            apmRequest.request.EchoCancellerEnabled = true;
-            apmRequest.request.NoiseSuppressionEnabled = true;
-            apmRequest.request.GainControllerEnabled = true;
-            apmRequest.request.HighPassFilterEnabled = true;
+        using var response = apmRequest.Send();
+        FfiResponse apmResponse = response;
+        apmHandle = IFfiHandleFactory.Default.NewFfiHandle(apmResponse.NewApm.Apm.Handle.Id);
+    }
 
-            using var response = apmRequest.Send();
-            FfiResponse apmResponse = response;
-            apmHandle = IFfiHandleFactory.Default.NewFfiHandle(apmResponse.NewApm.Apm.Handle.Id);
-        }
+    public static Apm NewDefault()
+    {
+        return new Apm(true, true, true, true);
+    }
 
-        public void Dispose()
+    public void Dispose()
+    {
+        lock (this)
         {
             apmHandle.Dispose();
         }
+    }
 
-        // TODO explicit Result<T> return type
-        /// <summary>
-        /// Processes the stream that goes from far end and plays by speaker
-        /// </summary>
-        public void ProcessReverseStream(
-            ReadOnlySpan<PCMSample> data,
-            uint numChannels,
-            uint samplesPerChannel,
-            SampleRate sampleRate)
+    /// <summary>
+    /// Processes the stream that goes from far end and plays by speaker
+    /// </summary>
+    public Result ProcessReverseStream(
+        ReadOnlySpan<PCMSample> data,
+        uint numChannels,
+        uint samplesPerChannel,
+        SampleRate sampleRate)
+    {
+        lock (this)
         {
             uint sizeInBytes = numChannels * samplesPerChannel * PCMSample.BytesPerSample;
 
@@ -192,20 +210,24 @@ public class ExampleRoom : MonoBehaviour
                     var streamResponse = response.ApmProcessReverseStream;
 
                     if (streamResponse.HasError)
-                        Debug.LogError($"Cannot {nameof(ProcessReverseStream)} due error: {streamResponse.Error}");
+                        Result.ErrorResult($"Cannot {nameof(ProcessReverseStream)} due error: {streamResponse.Error}");
+
+                    return Result.SuccessResult();
                 }
             }
         }
+    }
 
-        // TODO explicit Result<T> return type
-        /// <summary>
-        /// Processes the stream that goes from microphone
-        /// </summary>
-        public void ProcessStream(
-            ReadOnlySpan<PCMSample> data,
-            uint numChannels,
-            uint samplesPerChannel,
-            SampleRate sampleRate)
+    /// <summary>
+    /// Processes the stream that goes from microphone
+    /// </summary>
+    public Result ProcessStream(
+        ReadOnlySpan<PCMSample> data,
+        uint numChannels,
+        uint samplesPerChannel,
+        SampleRate sampleRate)
+    {
+        lock (this)
         {
             uint sizeInBytes = numChannels * samplesPerChannel * PCMSample.BytesPerSample;
 
@@ -225,35 +247,86 @@ public class ExampleRoom : MonoBehaviour
                     var streamResponse = response.ApmProcessStream;
 
                     if (streamResponse.HasError)
-                        Debug.LogError($"Cannot {nameof(ProcessStream)} due error: {streamResponse.Error}");
+                        Result.ErrorResult($"Cannot {nameof(ProcessStream)} due error: {streamResponse.Error}");
+
+                    return Result.SuccessResult();
                 }
             }
         }
     }
 
-    [SuppressMessage("ReSharper", "BuiltInTypeReferenceStyle")]
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly struct PCMSample
+    public Result SetStreamDelay(int delayMs)
     {
-        public const byte BytesPerSample = 2; // Int16 = Int8 * 2
-
-        public readonly Int16 data;
-
-        public PCMSample(Int16 data)
+        lock (this)
         {
-            this.data = data;
+            using var apmRequest = FFIBridge.Instance.NewRequest<LiveKit.Proto.ApmSetStreamDelayRequest>();
+            apmRequest.request.ApmHandle = (ulong)apmHandle.DangerousGetHandle().ToInt64();
+            apmRequest.request.DelayMs = delayMs;
+
+            using var wrap = apmRequest.Send();
+            FfiResponse response = wrap;
+            var delayResponse = response.ApmSetStreamDelay;
+
+            if (delayResponse.HasError)
+                return Result.ErrorResult($"Cannot {nameof(SetStreamDelay)} due error: {delayResponse.Error}");
+
+            return Result.SuccessResult();
         }
     }
+}
 
-    private readonly struct SampleRate
+/// <summary>
+/// Guarantees frame is 10 ms and is compatible to what WebRTC expects
+/// </summary>
+public readonly ref struct ApmFrame
+{
+    private readonly ReadOnlySpan<PCMSample> data;
+    private readonly uint numChannels;
+    private readonly uint samplesPerChannel;
+    private readonly SampleRate sampleRate;
+
+    internal ApmFrame(ReadOnlySpan<PCMSample> data, uint numChannels, uint samplesPerChannel, SampleRate sampleRate)
     {
-        public static readonly SampleRate Hz48000 = new(48000);
+        this.data = data;
+        this.numChannels = numChannels;
+        this.samplesPerChannel = samplesPerChannel;
+        this.sampleRate = sampleRate;
+    }
 
-        public readonly uint valueHz;
 
-        public SampleRate(uint value)
-        {
-            valueHz = value;
-        }
+    /// <summary>
+    ///     Cannot use Result due ref limitations in C#
+    /// </summary>
+    public static ApmFrame New(out string? error)
+    {
+        //TODO
+        error = "Not Implemented";
+        return default(ApmFrame);
+    }
+}
+
+public readonly struct SampleRate
+{
+    public static readonly SampleRate Hz48000 = new(48000);
+
+    public readonly uint valueHz;
+
+    public SampleRate(uint value)
+    {
+        valueHz = value;
+    }
+}
+
+[SuppressMessage("ReSharper", "BuiltInTypeReferenceStyle")]
+[StructLayout(LayoutKind.Sequential)]
+public readonly struct PCMSample
+{
+    public const byte BytesPerSample = 2; // Int16 = Int8 * 2
+
+    public readonly Int16 data;
+
+    public PCMSample(Int16 data)
+    {
+        this.data = data;
     }
 }
