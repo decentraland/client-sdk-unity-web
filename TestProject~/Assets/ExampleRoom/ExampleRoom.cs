@@ -1,22 +1,25 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using UnityEngine;
 using UnityEngine.UI;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using LiveKit;
+using LiveKit.Internal;
+using LiveKit.Internal.FFIClients.Requests;
 using LiveKit.Proto;
 using LiveKit.Rooms;
 using LiveKit.Rooms.Participants;
 using LiveKit.Rooms.Streaming.Audio;
-using LiveKit.Rooms.TrackPublications;
-using LiveKit.Rooms.Tracks;
 using UnityEngine.SceneManagement;
 
 public class ExampleRoom : MonoBehaviour
 {
     private Room m_Room;
+    private Apm apm;
     private Dictionary<IAudioStream, LivekitAudioSource> sourcesMap = new();
 
     public GridLayoutGroup ViewContainer;
@@ -85,6 +88,7 @@ public class ExampleRoom : MonoBehaviour
             SceneManager.LoadScene("JoinScene", LoadSceneMode.Single);
         });
 
+
         microphoneObject = new GameObject("microphone");
         var audioFilter = microphoneObject.AddComponent<AudioFilter>();
 
@@ -121,6 +125,128 @@ public class ExampleRoom : MonoBehaviour
         if (m_Room != null)
         {
             m_Room.DisconnectAsync(CancellationToken.None);
+        }
+
+        if (apm != null)
+        {
+            apm.Dispose();
+            apm = null;
+        }
+    }
+
+
+    private class Apm : IDisposable
+    {
+        private readonly FfiHandle apmHandle;
+
+        public Apm()
+        {
+            using var apmRequest = FFIBridge.Instance.NewRequest<NewApmRequest>();
+            apmRequest.request.EchoCancellerEnabled = true;
+            apmRequest.request.NoiseSuppressionEnabled = true;
+            apmRequest.request.GainControllerEnabled = true;
+            apmRequest.request.HighPassFilterEnabled = true;
+
+            using var response = apmRequest.Send();
+            FfiResponse apmResponse = response;
+            apmHandle = IFfiHandleFactory.Default.NewFfiHandle(apmResponse.NewApm.Apm.Handle.Id);
+        }
+
+        public void Dispose()
+        {
+            apmHandle.Dispose();
+        }
+
+        // TODO explicit Result<T> return type
+        /// <summary>
+        /// Processes the stream that goes from far end and plays by speaker
+        /// </summary>
+        public void ProcessReverseStream(
+            ReadOnlySpan<PCMSample> data,
+            uint numChannels,
+            uint samplesPerChannel,
+            SampleRate sampleRate)
+        {
+            uint sizeInBytes = numChannels * samplesPerChannel * PCMSample.BytesPerSample;
+
+            unsafe
+            {
+                fixed (void* ptr = data)
+                {
+                    using var apmRequest = FFIBridge.Instance.NewRequest<LiveKit.Proto.ApmProcessReverseStreamRequest>();
+                    apmRequest.request.ApmHandle = (ulong)apmHandle.DangerousGetHandle().ToInt64();
+                    apmRequest.request.DataPtr = new UIntPtr(ptr).ToUInt64();
+                    apmRequest.request.NumChannels = numChannels;
+                    apmRequest.request.SampleRate = sampleRate.valueHz;
+                    apmRequest.request.Size = sizeInBytes;
+
+                    using var wrap = apmRequest.Send();
+                    FfiResponse response = wrap;
+                    var streamResponse = response.ApmProcessReverseStream;
+
+                    if (streamResponse.HasError)
+                        Debug.LogError($"Cannot {nameof(ProcessReverseStream)} due error: {streamResponse.Error}");
+                }
+            }
+        }
+
+        // TODO explicit Result<T> return type
+        /// <summary>
+        /// Processes the stream that goes from microphone
+        /// </summary>
+        public void ProcessStream(
+            ReadOnlySpan<PCMSample> data,
+            uint numChannels,
+            uint samplesPerChannel,
+            SampleRate sampleRate)
+        {
+            uint sizeInBytes = numChannels * samplesPerChannel * PCMSample.BytesPerSample;
+
+            unsafe
+            {
+                fixed (void* ptr = data)
+                {
+                    using var apmRequest = FFIBridge.Instance.NewRequest<LiveKit.Proto.ApmProcessStreamRequest>();
+                    apmRequest.request.ApmHandle = (ulong)apmHandle.DangerousGetHandle().ToInt64();
+                    apmRequest.request.DataPtr = new UIntPtr(ptr).ToUInt64();
+                    apmRequest.request.NumChannels = numChannels;
+                    apmRequest.request.SampleRate = sampleRate.valueHz;
+                    apmRequest.request.Size = sizeInBytes;
+
+                    using var wrap = apmRequest.Send();
+                    FfiResponse response = wrap;
+                    var streamResponse = response.ApmProcessStream;
+
+                    if (streamResponse.HasError)
+                        Debug.LogError($"Cannot {nameof(ProcessStream)} due error: {streamResponse.Error}");
+                }
+            }
+        }
+    }
+
+    [SuppressMessage("ReSharper", "BuiltInTypeReferenceStyle")]
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct PCMSample
+    {
+        public const byte BytesPerSample = 2; // Int16 = Int8 * 2
+
+        public readonly Int16 data;
+
+        public PCMSample(Int16 data)
+        {
+            this.data = data;
+        }
+    }
+
+    private readonly struct SampleRate
+    {
+        public static readonly SampleRate Hz48000 = new(48000);
+
+        public readonly uint valueHz;
+
+        public SampleRate(uint value)
+        {
+            valueHz = value;
         }
     }
 }
