@@ -16,16 +16,13 @@ namespace ExampleRooms
         private const int DEFAULT_NUM_CHANNELS = 2;
         private const int DEFAULT_SAMPLE_RATE = 48000;
         private const float BUFFER_DURATION_S = 0.2f;
-        private const float S16_MAX_VALUE = 32767f;
-        private const float S16_MIN_VALUE = -32768f;
-        private const float S16_SCALE_FACTOR = 32768f;
         private readonly Mutex<RingBuffer> buffer;
         private readonly object lockObject = new();
 
         private readonly AudioSource audioSource;
         private readonly IAudioFilter audioFilter;
         private readonly Apm apm; // Doesn't own APM, Doesn't have to dispose
-        private short[] tempBuffer;
+        private PCMSample[] tempBuffer;
         private AudioFrame frame;
         private uint channels;
         private uint sampleRate;
@@ -113,7 +110,7 @@ namespace ExampleRooms
                         currentBufferSize = newBufferSize;
                     }
 
-                    tempBuffer = new short[data.Length];
+                    tempBuffer = new PCMSample[data.Length];
                     this.channels = (uint)channels;
                     this.sampleRate = (uint)sampleRate;
                     if (frame.IsValid) frame.Dispose();
@@ -131,16 +128,13 @@ namespace ExampleRooms
                 var tempSpan = tempBuffer.AsSpan();
                 for (var i = 0; i < data.Length; i++)
                 {
-                    var sample = data[i] * S16_SCALE_FACTOR;
-                    if (sample > S16_MAX_VALUE) sample = S16_MAX_VALUE;
-                    else if (sample < S16_MIN_VALUE) sample = S16_MIN_VALUE;
-                    tempSpan[i] = (short)(sample + (sample >= 0 ? 0.5f : -0.5f));
+                    tempSpan[i] = PCMSample.FromUnitySample(data[i]);
                 }
 
                 var shouldProcessFrame = false;
                 using (var guard = buffer.Lock())
                 {
-                    var audioBytes = MemoryMarshal.Cast<short, byte>(tempBuffer.AsSpan());
+                    var audioBytes = MemoryMarshal.Cast<PCMSample, byte>(tempBuffer.AsSpan());
                     guard.Value.Write(audioBytes);
                     shouldProcessFrame = guard.Value.AvailableRead() >= cachedFrameSize;
                 }
