@@ -170,6 +170,8 @@ MonoBehaviour:
   ViewContainer: {fileID: 1061089730}
   ViewPrefab: {fileID: 1032180714776240067, guid: 83584d27641c43b4c89ce96f1e8c38a8, type: 3}
   DisconnectButton: {fileID: 1770732189}
+  testClip: {fileID: 8300000, guid: 27a99e36737a6d94ab08fb2cd570857a, type: 3}
+  microphoneObject: {fileID: 0}
 --- !u!1 &297302484
 GameObject:
   m_ObjectHideFlags: 0
@@ -723,6 +725,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4f231c4fb786f3946a6b90b886c48677, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  m_SendPointerHoverToParent: 1
   m_HorizontalAxis: Horizontal
   m_VerticalAxis: Vertical
   m_SubmitButton: Submit

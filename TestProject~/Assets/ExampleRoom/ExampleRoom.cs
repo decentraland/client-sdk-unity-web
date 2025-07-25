@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using ExampleRooms;
 using LiveKit;
 using LiveKit.Internal;
 using LiveKit.Internal.FFIClients.Requests;
@@ -90,7 +91,6 @@ public class ExampleRoom : MonoBehaviour
 
 
         microphoneObject = new GameObject("microphone");
-        var audioFilter = microphoneObject.AddComponent<AudioFilter>();
 
         var microphoneName = Microphone.devices!.First();
 
@@ -99,12 +99,19 @@ public class ExampleRoom : MonoBehaviour
         audioSource.clip = Microphone.Start(microphoneName, true, 1, 48000); //frequency is not guaranteed
         // Wait until mic is initialized
         await UniTask.WaitWhile(() => !(Microphone.GetPosition(microphoneName) > 0)).Timeout(TimeSpan.FromSeconds(5));
-
+        
+        var audioFilter = microphoneObject.AddComponent<AudioFilter>();
+        // Prevent microphone feedback
+        microphoneObject.AddComponent<OmitAudioFilter>();
         // Play back the captured audio
         audioSource.Play();
 
-        var source = new OptimizedMonoRtcAudioSource(audioFilter);
+        // Optimised version won't work for some reason
+        //var source = new OptimizedMonoRtcAudioSource(audioFilter);
+        //source.Start();
+        var source = new CustomRtcAudioSource(audioSource, audioFilter);
         source.Start();
+        
         var myTrack = m_Room.AudioTracks.CreateAudioTrack("own", source);
         var trackOptions = new TrackPublishOptions
         {
