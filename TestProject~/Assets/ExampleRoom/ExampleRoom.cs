@@ -182,28 +182,22 @@ public class Apm : IDisposable
     }
 
     /// <summary>
-    /// Processes the stream that goes from far end and plays by speaker
+    /// Processes the stream that goes from far end and is played by speaker
     /// </summary>
-    public Result ProcessReverseStream(
-        ReadOnlySpan<PCMSample> data,
-        uint numChannels,
-        uint samplesPerChannel,
-        SampleRate sampleRate)
+    public Result ProcessReverseStream(ApmFrame frame)
     {
         lock (this)
         {
-            uint sizeInBytes = numChannels * samplesPerChannel * PCMSample.BytesPerSample;
-
             unsafe
             {
-                fixed (void* ptr = data)
+                fixed (void* ptr = frame.data)
                 {
                     using var apmRequest = FFIBridge.Instance.NewRequest<LiveKit.Proto.ApmProcessReverseStreamRequest>();
                     apmRequest.request.ApmHandle = (ulong)apmHandle.DangerousGetHandle().ToInt64();
                     apmRequest.request.DataPtr = new UIntPtr(ptr).ToUInt64();
-                    apmRequest.request.NumChannels = numChannels;
-                    apmRequest.request.SampleRate = sampleRate.valueHz;
-                    apmRequest.request.Size = sizeInBytes;
+                    apmRequest.request.NumChannels = frame.numChannels;
+                    apmRequest.request.SampleRate = frame.sampleRate.valueHz;
+                    apmRequest.request.Size = frame.SizeInBytes;
 
                     using var wrap = apmRequest.Send();
                     FfiResponse response = wrap;
@@ -221,26 +215,20 @@ public class Apm : IDisposable
     /// <summary>
     /// Processes the stream that goes from microphone
     /// </summary>
-    public Result ProcessStream(
-        ReadOnlySpan<PCMSample> data,
-        uint numChannels,
-        uint samplesPerChannel,
-        SampleRate sampleRate)
+    public Result ProcessStream(ApmFrame apmFrame)
     {
         lock (this)
         {
-            uint sizeInBytes = numChannels * samplesPerChannel * PCMSample.BytesPerSample;
-
             unsafe
             {
-                fixed (void* ptr = data)
+                fixed (void* ptr = apmFrame.data)
                 {
                     using var apmRequest = FFIBridge.Instance.NewRequest<LiveKit.Proto.ApmProcessStreamRequest>();
                     apmRequest.request.ApmHandle = (ulong)apmHandle.DangerousGetHandle().ToInt64();
                     apmRequest.request.DataPtr = new UIntPtr(ptr).ToUInt64();
-                    apmRequest.request.NumChannels = numChannels;
-                    apmRequest.request.SampleRate = sampleRate.valueHz;
-                    apmRequest.request.Size = sizeInBytes;
+                    apmRequest.request.NumChannels = apmFrame.numChannels;
+                    apmRequest.request.SampleRate = apmFrame.sampleRate.valueHz;
+                    apmRequest.request.Size = apmFrame.SizeInBytes;
 
                     using var wrap = apmRequest.Send();
                     FfiResponse response = wrap;
@@ -280,12 +268,14 @@ public class Apm : IDisposable
 /// </summary>
 public readonly ref struct ApmFrame
 {
-    private readonly ReadOnlySpan<PCMSample> data;
-    private readonly uint numChannels;
-    private readonly uint samplesPerChannel;
-    private readonly SampleRate sampleRate;
+    public readonly ReadOnlySpan<PCMSample> data;
+    public readonly uint numChannels;
+    public readonly uint samplesPerChannel;
+    public readonly SampleRate sampleRate;
 
-    internal ApmFrame(ReadOnlySpan<PCMSample> data, uint numChannels, uint samplesPerChannel, SampleRate sampleRate)
+    public uint SizeInBytes => numChannels * samplesPerChannel * PCMSample.BytesPerSample;
+
+    private ApmFrame(ReadOnlySpan<PCMSample> data, uint numChannels, uint samplesPerChannel, SampleRate sampleRate)
     {
         this.data = data;
         this.numChannels = numChannels;
@@ -297,11 +287,39 @@ public readonly ref struct ApmFrame
     /// <summary>
     ///     Cannot use Result due ref limitations in C#
     /// </summary>
-    public static ApmFrame New(out string? error)
+    public static ApmFrame New(
+        ReadOnlySpan<PCMSample> data,
+        uint numChannels,
+        uint samplesPerChannel,
+        SampleRate sampleRate,
+        out string? error)
     {
-        //TODO
-        error = "Not Implemented";
-        return default(ApmFrame);
+        error = null;
+
+        if (numChannels == 0)
+        {
+            error = "Number of channels cannot be zero.";
+            return default;
+        }
+
+        // Expected samples per 10 ms per channel
+        uint expectedSamplesPerChannel = sampleRate.valueHz / 100;
+
+        if (samplesPerChannel != expectedSamplesPerChannel)
+        {
+            error =
+                $"Frame must be 10 ms long. Expected {expectedSamplesPerChannel} samples per channel, got {samplesPerChannel}.";
+            return default;
+        }
+
+        if (data.Length != samplesPerChannel * numChannels)
+        {
+            error =
+                $"Data length ({data.Length}) does not match samplesPerChannel ({samplesPerChannel}) * numChannels ({numChannels}).";
+            return default;
+        }
+
+        return new ApmFrame(data, numChannels, samplesPerChannel, sampleRate);
     }
 }
 
@@ -311,7 +329,7 @@ public readonly struct SampleRate
 
     public readonly uint valueHz;
 
-    public SampleRate(uint value)
+    private SampleRate(uint value)
     {
         valueHz = value;
     }
